@@ -1,55 +1,72 @@
-# RFQ Executive Intelligence Dashboard
+# HP Valves — RFQ Intelligence Dashboard
 
-A portable, browser-based RFQ dashboard generated from `HP.xlsx`. It is designed for executive review and commercial/tender follow-up, with one shared filter context across every tab.
+A self-contained, offline-capable executive dashboard built from `HP.xlsx` (sheet **MAIN TABLE**).
+No server, no build step, no external chart library: open `index.html` by double-clicking it.
 
 ## Files
 
-- `index.html` — the full interactive dashboard (no framework or chart library required).
-- `data.json` — dashboard-ready data generated from the Excel workbook.
-- `convert.py` — dependency-free Python converter for refreshing `data.json` from a new Excel file with the same structure.
-- `README.md` — setup, metric definitions and refresh instructions.
+| File | Purpose |
+|---|---|
+| `index.html` | The dashboard. Single file (HTML + CSS + JS + embedded dataset). Works from `file://`. |
+| `convert.py` | Reads `HP.xlsx`, cleans and enriches every RFQ line, writes `data.json` and embeds it into `index.html`. |
+| `data.json` | The clean dataset + metadata, for inspection or reuse in other tools. |
+| `README.md` | This file. |
 
-## Dashboard structure
-
-The dashboard contains six views: Executive Summary, Country, Customer, Open RFQs, Under Pipeline, and Customer Performance. The global filter bar includes Year, Quarter, Month, Week, Country, Customer, Status and Vendor, plus Reset. Filters apply consistently across all views.
-
-The Executive Summary displays Total RFQ Value in EUR, RFQ Count, PO Received, Under Pipeline, Open RFQs, Bid Lost and RFQ Declined, followed by trend, status, geography, customer and closing-exposure visuals. Country and Customer views support click-through drilldowns. Open RFQs and Under Pipeline have operational registers with dynamic deadline calculations.
-
-## Run the dashboard
-
-Because browsers generally block `fetch()` from `file://` pages, serve the folder locally instead of double-clicking the HTML file.
+## Refresh the dashboard with a new HP.xlsx
 
 ```bash
-cd rfq_dashboard
-python -m http.server 8000
+pip install pandas openpyxl        # once
+python convert.py                  # HP.xlsx in the same folder
+python convert.py "C:\path\HP.xlsx" --sheet "MAIN TABLE"
 ```
 
-Then open `http://localhost:8000` in your browser.
+`convert.py` prints a status summary and rewrites both `data.json` and the dataset inside `index.html`.
+Keep `index.html` next to `convert.py`; the script only replaces the `<script id="hp-data">` block, so any design changes you make to `index.html` are preserved.
 
-## Refresh with a newer Excel file
+If the embedded block is empty (e.g. you copied a fresh template), the page falls back to fetching `data.json` — that only works over `http://`, not `file://`, which is why the data is embedded.
 
-Place the replacement workbook in this folder and run:
+## Pages
 
-```bash
-python convert.py HP.xlsx data.json
-```
+1. **Executive summary** — Total quoted value (EUR) + RFQ count, then PO Received, Under Pipeline, Open RFQ's, Bid Lost, RFQ Declined (value, count, share), a value-share ribbon, auto-generated insights, and charts: monthly intake (count by status + value line), status mix, value by country, top customers, win-rate trend, RFQ-to-closing turnaround, declined-reason categories, deal-owner workload.
+2. **Countries** — "All countries" plus one card per country (value, RFQs, POs, win rate, status mini-bar). Clicking a card sets the Country filter, so every chart, KPI and the full-data table follow. The table includes **RFQ Received**, **Closing Date**, **Days to close** (closing − received) and **Due in** (closing − today, for open/pipeline lines; red when overdue).
+3. **Customers** — Searchable customer list with highlight data (value, RFQs, POs, country, last RFQ). Clicking a customer sets the Customer filter and shows the full profile: first/latest RFQ, last PO, PO value, win rate, status ribbon, monthly intake, stage breakdown and the full RFQ table.
+4. **Open RFQ's** — Count, value (with and without budgetary quotes), overdue count, closing within 7 days, median age; charts by stage, aging, country, closing-date week and biggest open opportunities; register sorted by closing date.
+5. **Under pipeline** — Count, value, Awaiting-PO value, clarification stage, days since quotation; stage funnel, aging, country, customer; register with quotation and clarification dates.
+6. **Customer performance** — Matrix per customer: Country, Segment, **Last order**, **Days since**, **Months active**, **Lifetime value** (PO received, EUR), POs, Avg PO, **RFQ count**, Quoted value, Win rate, Open/pipeline, Avg days to PO, First/Latest RFQ. Segments: Active (≤90 d since order), Cooling (≤180), At risk (≤365), Dormant (>365), No order yet. Click a customer name to open its Customers page.
 
-Then refresh the browser. `convert.py` uses only the Python standard library; no packages need to be installed.
+## Filters (global, apply to every page)
 
-## Metric definitions
+Year · Quarter · Month · Week · Country · Customer · Status · Vendor · free-text search · **Reset filters** button.
+Options cascade (e.g. choosing 2025 only lists 2025 months). Active filters appear as removable chips.
+Clicking bars, slices, country cards or customer rows also sets the matching filter (cross-filtering).
 
-- **Total RFQ Value**: sum of the Excel `Value` column, displayed as EUR per the requested dashboard convention.
-- **RFQ Count**: number of RFQ rows in the current filter context.
-- **Under Pipeline**: stages `Awaiting PO`, `Clarification Complete`, or `Clarification Completed`.
-- **Open RFQs**: stages `Floated To Supplier/Internal`, `Quote Received Supplier/Internal`, or `Quoted To Client`.
-- **PO Received / Bid Lost / RFQ Declined**: direct status mapping from the Stage column.
-- **Days to Close**: `Closing Date - today's date`; negative values are overdue. This recalculates every time the dashboard opens.
-- **RFQ Window Days**: `Closing Date - RFQ Received`.
-- **Customer Last Order**: latest non-blank `PO Received` date for the customer.
-- **Days Since**: today minus Customer Last Order.
-- **Relationship Months**: first RFQ Received date through today.
-- **Lifetime Value**: sum of RFQ `Value` for that customer in the active global filter context.
+**Exclude budgetary quotes** toggle: lines whose description/feedback contain *BDGTRY / BUDGETORY / Budgetary / Indicative* are flagged. Two such quotes (SEC ≈ €12.9M, SWA ≈ €11.8M) account for ~90% of the open value, so the toggle shows the bankable pipeline.
+
+Themes: **Control room** (dark), **Datasheet** (light), **Boardroom** (navy). Every table exports the current view to CSV.
+
+## Definitions
+
+| Metric | Definition |
+|---|---|
+| Value | `Value` column, treated as EUR. `--`, blanks and 0 count as unpriced (shown as n/a) |
+| Win rate | PO Received ÷ (PO Received + Bid Lost) — decided bids only |
+| Days to close | Closing Date − RFQ Received |
+| Due in | Closing Date − today (open / pipeline lines only) |
+| Days to PO | PO Received − RFQ Received |
+| Days since quote | today − QTN Date (falls back to RFQ Received) |
+| Last order | Most recent PO Received date for the customer |
+| Months active | (latest of RFQ / QTN / PO date − first RFQ) ÷ 30.44, minimum 1 |
+| Lifetime value | Sum of `Value` for lines with status PO Received |
+| Year / Quarter / Month | Derived from RFQ Received; Week uses the sheet's `Week Num` |
 
 ## Data notes
 
-The source workbook contains 251 RFQ records. The generated snapshot contains 100 Open RFQs, 53 PO Received, 35 Under Pipeline, 27 Bid Lost and 36 RFQ Declined. The source `Value` field totals approximately EUR 31.04M before filters.
+- Source header `Staus` (misspelt) is mapped to `status`; the corrected spelling is also accepted.
+- `MGE Cost Price` is shown as recorded in the row details but is not used for margin, because its currency is inconsistent with `Value` (often ≈ 4.8× the EUR value, suggesting SAR/AED). Confirm the currency before adding a margin KPI.
+- Declined reasons are free text; `convert.py` buckets them (`declinedGroup`) with keyword rules that you can edit in `DECLINE_BUCKETS`.
+- Rows with no Customer and no RFQ date are dropped.
+
+## Design notes (skills applied)
+
+- **skill-for-dashbiard**: executive-first layout, insights that explain what/why/risk/opportunity, multi-theme, cross-filtering, drill-through, CSV export, aging and Pareto analysis.
+- **uiux-pro-max-design-intelligence** priority checks: WCAG contrast on all themes (status colours darkened on light theme), 44 px touch targets on nav/list/buttons, visible focus rings, SVG icons only, 16 px base type with tabular numerals, semantic colour tokens (no raw hex in components), motion ≤ 300 ms and disabled under `prefers-reduced-motion`, status never conveyed by colour alone (always paired with a label), responsive down to mobile.

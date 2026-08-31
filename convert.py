@@ -1,229 +1,280 @@
 #!/usr/bin/env python3
-"""Convert HP.xlsx into dashboard-ready data.json using only Python stdlib.
-
-Usage:
-    python convert.py HP.xlsx data.json
 """
-from __future__ import annotations
+convert.py — HP Valves RFQ Intelligence Dashboard
+--------------------------------------------------
+Reads the "MAIN TABLE" sheet of HP.xlsx, cleans and enriches every RFQ line,
+then writes:
 
+  1. data.json   — the clean dataset + metadata (for inspection / other tools)
+  2. index.html  — the same JSON is injected into the <script id="hp-data"> tag
+                   so the dashboard opens by double-click (file://) with no server.
+
+Usage
+  python convert.py                       # uses HP.xlsx next to this script
+  python convert.py path/to/HP.xlsx       # explicit source workbook
+  python convert.py HP.xlsx --sheet "MAIN TABLE" --html index.html --json data.json
+
+Requires: pandas, openpyxl   (pip install pandas openpyxl)
+"""
+import argparse
 import json
 import math
 import re
 import sys
-import zipfile
-from datetime import datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
-NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
-      "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
-REL_NS = {"p": "http://schemas.openxmlformats.org/package/2006/relationships"}
-DATE_HEADERS = {
-    "RFQ Received", "Closing Date", "QTN Date", "Clarification Received",
-    "Clarification Completed", "PO Received"
+import pandas as pd
+
+# --------------------------------------------------------------------------
+# Column mapping: Excel header  ->  JSON key
+# --------------------------------------------------------------------------
+COLUMNS = {
+    "SY": "sy",
+    "Week Num": "week",
+    "Country": "country",
+    "Customer": "customer",
+    "Deal Name": "deal",
+    "Deal Owner": "owner",
+    "RFQ Received": "rfq",
+    "Closing Date": "close",
+    "Tender Category": "category",
+    "Description": "desc",
+    "Rfx Type": "rfx",
+    "Vendor": "vendor",
+    "Internal Ref.": "ref",
+    "HP QTN REFERENCE": "hpRef",
+    "Value": "value",
+    "Stage": "stage",
+    "Staus": "status",          # sic — header is misspelt in the source workbook
+    "Status": "status",         # tolerate the corrected spelling too
+    "QTN Date": "qtn",
+    "MGE Cost Price": "cost",
+    "Clarification Received": "clarRecv",
+    "Clarification Completed": "clarDone",
+    "Declined Reason": "declined",
+    "Bid Feedback": "feedback",
+    "PO Received": "po",
 }
-STATUS_MAP = {
-    "Awaiting PO": "Under Pipeline",
-    "Clarification Complete": "Under Pipeline",
-    "Clarification Completed": "Under Pipeline",
-    "Floated To Supplier/Internal": "Open RFQ's",
-    "Quote Received Supplier/Internal": "Open RFQ's",
-    "Quoted To Client": "Open RFQ's",
-    "PO Received": "PO Received",
-    "Bid Lost": "Bid Lost",
-    "RFQ Declined": "RFQ Declined",
+
+DATE_KEYS = ["rfq", "close", "qtn", "clarRecv", "clarDone", "po"]
+STATUS_ORDER = ["PO Received", "Under Pipeline", "Open RFQ's", "Bid Lost", "RFQ Declined"]
+
+# Normalise a few status spellings that show up in hand-maintained trackers
+STATUS_ALIASES = {
+    "open rfq": "Open RFQ's", "open rfqs": "Open RFQ's", "open rfq's": "Open RFQ's",
+    "po received": "PO Received", "under pipeline": "Under Pipeline",
+    "bid lost": "Bid Lost", "rfq declined": "RFQ Declined", "declined": "RFQ Declined",
 }
 
 
-def excel_date(n):
-    try:
-        n = float(n)
-    except (TypeError, ValueError):
-        return None
-    # Excel's 1900 date system (including the historic leap-year bug).
-    dt = datetime(1899, 12, 30) + timedelta(days=n)
-    return dt.date().isoformat()
-
-
-def col_index(cell_ref: str) -> int:
-    letters = re.match(r"([A-Z]+)", cell_ref).group(1)
-    n = 0
-    for ch in letters:
-        n = n * 26 + (ord(ch) - 64)
-    return n - 1
-
-
-def load_shared_strings(zf):
-    name = "xl/sharedStrings.xml"
-    if name not in zf.namelist():
-        return []
-    root = ET.fromstring(zf.read(name))
-    strings = []
-    for si in root.findall("m:si", NS):
-        parts = []
-        for t in si.iter("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t"):
-            parts.append(t.text or "")
-        strings.append("".join(parts))
-    return strings
-
-
-def resolve_first_sheet(zf):
-    wb = ET.fromstring(zf.read("xl/workbook.xml"))
-    sheet = wb.find("m:sheets/m:sheet", NS)
-    if sheet is None:
-        raise RuntimeError("Workbook contains no worksheets")
-    rid = sheet.attrib["{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"]
-    rels = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
-    target = None
-    for rel in rels.findall("p:Relationship", REL_NS):
-        if rel.attrib.get("Id") == rid:
-            target = rel.attrib.get("Target")
-            break
-    if not target:
-        raise RuntimeError("Unable to resolve worksheet relationship")
-    target = target.lstrip("/")
-    if not target.startswith("xl/"):
-        target = "xl/" + target
-    return target, sheet.attrib.get("name", "Sheet1")
-
-
-def cell_value(c, shared):
-    typ = c.attrib.get("t")
-    v = c.find("m:v", NS)
-    if typ == "inlineStr":
-        t = c.find("m:is/m:t", NS)
-        return t.text if t is not None else ""
-    if v is None:
-        return None
-    raw = v.text
-    if typ == "s":
-        try:
-            return shared[int(raw)]
-        except Exception:
-            return raw
-    if typ == "b":
-        return raw == "1"
-    if typ in ("str", "e"):
-        return raw
-    try:
-        num = float(raw)
-        return int(num) if num.is_integer() else num
-    except (TypeError, ValueError):
-        return raw
-
-
-def normalize_text(v):
-    if v is None:
+def clean_text(v):
+    if v is None or (isinstance(v, float) and math.isnan(v)):
         return ""
-    if isinstance(v, str):
-        return v.strip()
-    return str(v).strip()
+    s = str(v).strip()
+    return "" if s.lower() in {"nan", "nat", "none"} else s
 
 
-def derive_status(stage, existing):
-    stage = normalize_text(stage)
-    existing = normalize_text(existing)
-    return STATUS_MAP.get(stage, existing or stage or "Unclassified")
-
-
-def quarter(month):
-    return f"Q{((month - 1)//3)+1}"
-
-
-def month_name(month):
-    return datetime(2000, month, 1).strftime("%b")
-
-
-def parse_date(s):
-    if not s:
+def to_number(v):
+    """'--', blanks and text become None; everything numeric becomes float."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = re.sub(r"[^\d.\-]", "", str(v))
+    if s in {"", "-", ".", "-."}:
         return None
     try:
-        return datetime.fromisoformat(s).date()
+        return float(s)
+    except ValueError:
+        return None
+
+
+def to_iso(v):
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return None
+    if isinstance(v, (datetime, date, pd.Timestamp)):
+        if pd.isna(v):
+            return None
+        return pd.Timestamp(v).strftime("%Y-%m-%d")
+    try:
+        ts = pd.to_datetime(str(v), errors="coerce", dayfirst=False)
+        return None if pd.isna(ts) else ts.strftime("%Y-%m-%d")
     except Exception:
         return None
 
 
-def convert(input_path: Path, output_path: Path):
-    with zipfile.ZipFile(input_path) as zf:
-        shared = load_shared_strings(zf)
-        sheet_path, sheet_name = resolve_first_sheet(zf)
-        root = ET.fromstring(zf.read(sheet_path))
-        parsed_rows = []
-        for row in root.findall(".//m:sheetData/m:row", NS):
-            cells = {}
-            for c in row.findall("m:c", NS):
-                ref = c.attrib.get("r", "A1")
-                cells[col_index(ref)] = cell_value(c, shared)
-            parsed_rows.append(cells)
+def days_between(a, b):
+    if not a or not b:
+        return None
+    return (date.fromisoformat(b) - date.fromisoformat(a)).days
 
-    if not parsed_rows:
-        raise RuntimeError("No rows found")
-    max_col = max(parsed_rows[0].keys())
-    headers = [normalize_text(parsed_rows[0].get(i)) for i in range(max_col + 1)]
-    header_index = {h: i for i, h in enumerate(headers)}
 
-    records = []
-    for source_row_num, row in enumerate(parsed_rows[1:], start=2):
-        if not any(v not in (None, "") for v in row.values()):
-            continue
-        rec = {}
-        for i, h in enumerate(headers):
-            if not h:
+def normalise_status(s):
+    key = re.sub(r"\s+", " ", s.strip().lower()).replace("’", "'")
+    return STATUS_ALIASES.get(key, s.strip())
+
+
+DECLINE_BUCKETS = [
+    ("No supplier quote",      r"supplier|no quote received|quoted to esnad|for esnad|awarded to hp|pre ?payment|agent"),
+    ("Insufficient details",   r"detail|information|not matching|no sec bid"),
+    ("Out of scope",           r"out of scope|not in .*sow|scope"),
+    ("Portal / deadline",      r"portal|deadline|due date|closure|submit"),
+    ("Duplicate / re-floated", r"refloat|already|po received|duplicate"),
+    ("Not quoted",             r"not quoted"),
+]
+
+
+def bucket_declined(text: str) -> str:
+    t = (text or "").lower()
+    if not t:
+        return "No reason recorded"
+    for label, pat in DECLINE_BUCKETS:
+        if re.search(pat, t):
+            return label
+    return "Other"
+
+
+def load(path: Path, sheet: str) -> pd.DataFrame:
+    df = pd.read_excel(path, sheet_name=sheet)
+    df.columns = [str(c).strip() for c in df.columns]
+    # keep only rows that have a customer or an RFQ date
+    keep = [c for c in ("Customer", "RFQ Received") if c in df.columns]
+    if keep:
+        df = df.dropna(subset=keep, how="all")
+    return df.reset_index(drop=True)
+
+
+def build_rows(df: pd.DataFrame):
+    rows = []
+    for i, rec in df.iterrows():
+        r = {"id": int(i) + 1}
+        for col, key in COLUMNS.items():
+            if col not in df.columns:
                 continue
-            value = row.get(i)
-            if h in DATE_HEADERS and isinstance(value, (int, float)):
-                value = excel_date(value)
-            elif isinstance(value, float) and not math.isfinite(value):
-                value = None
-            rec[h] = value
+            v = rec[col]
+            if key in DATE_KEYS:
+                r[key] = to_iso(v)
+            elif key in ("value", "cost"):
+                r[key] = to_number(v)
+            elif key in ("sy", "week"):
+                n = to_number(v)
+                r[key] = int(n) if n is not None else None
+            else:
+                r[key] = clean_text(v)
+        r["status"] = normalise_status(r.get("status", "")) or "Unknown"
+        r["deal"] = clean_text(r.get("deal", ""))
 
-        rec["Status"] = derive_status(rec.get("Stage"), rec.get("Staus"))
-        rec.pop("Staus", None)
-        rec["Source Row"] = source_row_num
-
-        received = parse_date(rec.get("RFQ Received"))
-        closing = parse_date(rec.get("Closing Date"))
-        po = parse_date(rec.get("PO Received"))
-        if received:
-            rec["Year"] = received.year
-            rec["Quarter"] = quarter(received.month)
-            rec["Month"] = f"{received.month:02d} - {month_name(received.month)}"
-            rec["MonthNum"] = received.month
-            rec["Week"] = rec.get("Week Num") or int(received.strftime("%V"))
+        # --- derived time fields (based on RFQ Received) --------------------
+        rfq = r.get("rfq")
+        if rfq:
+            d = date.fromisoformat(rfq)
+            r["year"] = d.year
+            r["quarter"] = f"Q{(d.month - 1) // 3 + 1}"
+            r["month"] = f"{d.year}-{d.month:02d}"
+            if r.get("week") is None:
+                r["week"] = d.isocalendar()[1]
+            if r.get("sy") is None:
+                r["sy"] = d.year
         else:
-            rec["Year"] = rec.get("SY") or None
-            rec["Quarter"] = None
-            rec["Month"] = None
-            rec["MonthNum"] = None
-            rec["Week"] = rec.get("Week Num") or None
+            r["year"] = r.get("sy")
+            r["quarter"] = None
+            r["month"] = None
 
-        rec["RFQ Window Days"] = (closing - received).days if received and closing else None
-        rec["Order Cycle Days"] = (po - received).days if received and po else None
-        try:
-            rec["Value"] = float(rec.get("Value")) if rec.get("Value") not in (None, "", "--") else 0.0
-        except (TypeError, ValueError):
-            rec["Value"] = 0.0
-        records.append(rec)
+        # --- budgetary / indicative quotes (inflate pipeline value) ---------
+        blob = f"{r.get('desc','')} {r.get('feedback','')}".lower()
+        r["budgetary"] = bool(re.search(r"bdgtry|budgetory|budgetary|budgetry|indicative", blob))
 
-    metadata = {
-        "source_file": input_path.name,
-        "sheet": sheet_name,
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        # --- declined-reason bucket (free text -> analysable category) -----
+        r["declinedGroup"] = bucket_declined(r.get("declined", "")) if r["status"] == "RFQ Declined" else ""
+
+        # --- derived cycle-time fields --------------------------------------
+        r["daysToClose"] = days_between(rfq, r.get("close"))      # RFQ -> Closing date
+        r["daysToQtn"] = days_between(rfq, r.get("qtn"))          # RFQ -> Quotation
+        r["daysToPO"] = days_between(rfq, r.get("po"))            # RFQ -> PO received
+        r["daysClarification"] = days_between(r.get("clarRecv"), r.get("clarDone"))
+        rows.append(r)
+    return rows
+
+
+def build_meta(rows, source: Path, sheet: str):
+    def uniq(key):
+        return sorted({r[key] for r in rows if r.get(key) not in (None, "")}, key=lambda x: str(x))
+
+    statuses = [s for s in STATUS_ORDER if any(r["status"] == s for r in rows)]
+    statuses += [s for s in uniq("status") if s not in statuses]
+    dates = [r["rfq"] for r in rows if r.get("rfq")]
+    return {
+        "title": "HP Valves — RFQ Intelligence",
+        "source": source.name,
+        "sheet": sheet,
+        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "currency": "EUR",
-        "record_count": len(records),
-        "status_logic": STATUS_MAP,
-        "notes": [
-            "Value is displayed as EUR per dashboard requirement.",
-            "Days to close is calculated in the browser from Closing Date against the viewer's current date.",
-            "RFQ Window Days is Closing Date minus RFQ Received.",
-            "Customer Last Order uses the latest PO Received date for that customer."
-        ]
+        "rowCount": len(rows),
+        "dateRange": [min(dates), max(dates)] if dates else [None, None],
+        "statuses": statuses,
+        "countries": uniq("country"),
+        "customers": uniq("customer"),
+        "vendors": uniq("vendor"),
+        "owners": uniq("owner"),
+        "years": uniq("year"),
     }
-    output_path.write_text(json.dumps({"metadata": metadata, "records": records}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote {len(records)} records to {output_path}")
+
+
+def inject_html(html_path: Path, payload: str):
+    html = html_path.read_text(encoding="utf-8")
+    pattern = re.compile(r'(<script id="hp-data" type="application/json">)(.*?)(</script>)', re.S)
+    if not pattern.search(html):
+        sys.exit(f"ERROR: {html_path} has no <script id=\"hp-data\"> tag to inject into.")
+    # protect against a literal </script> inside free-text fields
+    safe = payload.replace("</", "<\\/")
+    html = pattern.sub(lambda m: m.group(1) + safe + m.group(3), html, count=1)
+    html_path.write_text(html, encoding="utf-8")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Convert HP.xlsx into data.json + self-contained index.html")
+    ap.add_argument("xlsx", nargs="?", default="HP.xlsx")
+    ap.add_argument("--sheet", default="MAIN TABLE")
+    ap.add_argument("--json", default="data.json")
+    ap.add_argument("--html", default="index.html")
+    ap.add_argument("--no-inject", action="store_true", help="write data.json only")
+    args = ap.parse_args()
+
+    here = Path(__file__).resolve().parent
+    src = Path(args.xlsx)
+    if not src.exists():
+        src = here / args.xlsx
+    if not src.exists():
+        sys.exit(f"ERROR: workbook not found: {args.xlsx}")
+
+    df = load(src, args.sheet)
+    rows = build_rows(df)
+    meta = build_meta(rows, src, args.sheet)
+    payload = json.dumps({"meta": meta, "rows": rows}, ensure_ascii=False, separators=(",", ":"))
+
+    json_path = Path(args.json) if Path(args.json).is_absolute() else here / args.json
+    json_path.write_text(json.dumps({"meta": meta, "rows": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"✓ {json_path.name}: {len(rows)} rows, {len(meta['customers'])} customers, "
+          f"{len(meta['countries'])} countries, {meta['dateRange'][0]} → {meta['dateRange'][1]}")
+
+    if not args.no_inject:
+        html_path = Path(args.html) if Path(args.html).is_absolute() else here / args.html
+        if not html_path.exists():
+            sys.exit(f"ERROR: {html_path} not found (keep index.html next to convert.py)")
+        inject_html(html_path, payload)
+        print(f"✓ {html_path.name}: dataset embedded ({len(payload)//1024} KB). Double-click to open.")
+
+    # quick console summary
+    by_status = {}
+    for r in rows:
+        s = by_status.setdefault(r["status"], [0, 0.0])
+        s[0] += 1
+        s[1] += r["value"] or 0
+    for s in meta["statuses"]:
+        c, v = by_status.get(s, (0, 0))
+        print(f"  {s:<16} {c:>4} RFQs   € {v:,.0f}")
 
 
 if __name__ == "__main__":
-    src = Path(sys.argv[1] if len(sys.argv) > 1 else "HP.xlsx")
-    dst = Path(sys.argv[2] if len(sys.argv) > 2 else "data.json")
-    convert(src, dst)
+    main()
