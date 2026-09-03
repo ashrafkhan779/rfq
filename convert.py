@@ -58,11 +58,12 @@ COLUMNS = {
 }
 
 DATE_KEYS = ["rfq", "close", "qtn", "clarRecv", "clarDone", "po"]
-STATUS_ORDER = ["PO Received", "Under Pipeline", "Open RFQ's", "Bid Lost", "RFQ Declined"]
+STATUS_ORDER = ["PO Received", "Under Pipeline", "Open Quote", "Bid Lost", "RFQ Declined"]
 
 # Normalise a few status spellings that show up in hand-maintained trackers
 STATUS_ALIASES = {
-    "open rfq": "Open RFQ's", "open rfqs": "Open RFQ's", "open rfq's": "Open RFQ's",
+    "open rfq": "Open Quote", "open rfqs": "Open Quote", "open rfq's": "Open Quote",
+    "open quote": "Open Quote", "open quotes": "Open Quote", "open quotation": "Open Quote",
     "po received": "PO Received", "under pipeline": "Under Pipeline",
     "bid lost": "Bid Lost", "rfq declined": "RFQ Declined", "declined": "RFQ Declined",
 }

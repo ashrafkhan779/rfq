@@ -7,7 +7,7 @@ No server, no build step, no external chart library: open `index.html` by double
 
 | File | Purpose |
 |---|---|
-| `index.html` | The dashboard. Single file (HTML + CSS + JS + embedded dataset). Works from `file://`. |
+| `index.html` | The dashboard. Single file (HTML + CSS + JS + SheetJS + embedded dataset). Works from `file://` and GitHub Pages. |
 | `convert.py` | Reads `HP.xlsx`, cleans and enriches every RFQ line, writes `data.json` and embeds it into `index.html`. |
 | `data.json` | The clean dataset + metadata, for inspection or reuse in other tools. |
 | `README.md` | This file. |
@@ -23,16 +23,30 @@ python convert.py "C:\path\HP.xlsx" --sheet "MAIN TABLE"
 `convert.py` prints a status summary and rewrites both `data.json` and the dataset inside `index.html`.
 Keep `index.html` next to `convert.py`; the script only replaces the `<script id="hp-data">` block, so any design changes you make to `index.html` are preserved.
 
-If the embedded block is empty (e.g. you copied a fresh template), the page falls back to fetching `data.json` — that only works over `http://`, not `file://`, which is why the data is embedded.
+### Or update without Python — the Data & upload tab
+
+Open the **Data & upload** tab, drop the new `HP.xlsx` on it. The workbook is parsed in the browser (SheetJS is embedded; nothing leaves your machine) with the same rules as `convert.py`, and every KPI, chart, table and remark refreshes immediately. The upload log shows row/status counts and warns about missing headers or unrecognised status values.
+
+### Publish live on GitHub Pages
+
+When served over `http(s)` the page loads **`data.json` from the repository first** (with a cache-busting timestamp, `cache: no-store`), and only falls back to the embedded copy if that fails. So the live dashboard updates by replacing one file:
+
+1. Data & upload → drop the new `HP.xlsx` → check the log.
+2. Click **Download data.json**.
+3. Commit it to the repo as `data.json`, next to `index.html` (GitHub web UI: open the file → Edit, or drag-and-drop onto the repo).
+4. GitHub Pages redeploys in ~1 minute; the sidebar footer shows the new "Rebuilt" time.
+
+Opening `index.html` from disk (`file://`) uses the embedded data, so run `python convert.py` when you also want the offline copy refreshed.
 
 ## Pages
 
-1. **Executive summary** — Total quoted value (EUR) + RFQ count, then PO Received, Under Pipeline, Open RFQ's, Bid Lost, RFQ Declined (value, count, share), a value-share ribbon, auto-generated insights, and charts: monthly intake (count by status + value line), status mix, value by country, top customers, win-rate trend, RFQ-to-closing turnaround, declined-reason categories, deal-owner workload.
+1. **Executive summary** — Total quoted value (EUR) + RFQ count, then PO Received, Under Pipeline, Open Quote, Bid Lost, RFQ Declined (value, count, share), a value-share ribbon, and charts: monthly intake (count by status with totals above each column, value line with labels), status mix, value by country, top customers, win-rate trend, RFQ-to-closing turnaround, declined-reason categories, deal-owner workload.
 2. **Countries** — "All countries" plus one card per country (value, RFQs, POs, win rate, status mini-bar). Clicking a card sets the Country filter, so every chart, KPI and the full-data table follow. The table includes **RFQ Received**, **Closing Date**, **Days to close** (closing − received) and **Due in** (closing − today, for open/pipeline lines; red when overdue).
-3. **Customers** — Searchable customer list with highlight data (value, RFQs, POs, country, last RFQ). Clicking a customer sets the Customer filter and shows the full profile: first/latest RFQ, last PO, PO value, win rate, status ribbon, monthly intake, stage breakdown and the full RFQ table.
-4. **Open RFQ's** — Count, value (with and without budgetary quotes), overdue count, closing within 7 days, median age; charts by stage, aging, country, closing-date week and biggest open opportunities; register sorted by closing date.
+3. **Customers** — Searchable customer list with highlight data (value, RFQs, POs, country, last RFQ). Clicking a customer sets the Customer filter and shows the full profile: first/latest RFQ, last PO, PO value, win rate, status ribbon, full-width monthly intake, then "Where the RFQs sit" (count · value per stage) beside a Countries chart (count · value per country), and the full RFQ table.
+4. **Open quotes** — Count, value (with and without budgetary quotes), overdue count, closing within 7 days, median age; charts by stage, aging, country, closing-date week and biggest open opportunities; register sorted by closing date.
 5. **Under pipeline** — Count, value, Awaiting-PO value, clarification stage, days since quotation; stage funnel, aging, country, customer; register with quotation and clarification dates.
 6. **Customer performance** — Matrix per customer: Country, Segment, **Last order**, **Days since**, **Months active**, **Lifetime value** (PO received, EUR), POs, Avg PO, **RFQ count**, Quoted value, Win rate, Open/pipeline, Avg days to PO, First/Latest RFQ. Segments: Active (≤90 d since order), Cooling (≤180), At risk (≤365), Dormant (>365), No order yet. Click a customer name to open its Customers page.
+7. **Data & upload** — Excel upload (in-browser), current-dataset summary with status counts, **Download data.json** / clean CSV, and the GitHub publishing steps.
 
 ## Filters (global, apply to every page)
 
@@ -42,7 +56,7 @@ Clicking bars, slices, country cards or customer rows also sets the matching fil
 
 **Exclude budgetary quotes** toggle: lines whose description/feedback contain *BDGTRY / BUDGETORY / Budgetary / Indicative* are flagged. Two such quotes (SEC ≈ €12.9M, SWA ≈ €11.8M) account for ~90% of the open value, so the toggle shows the bankable pipeline.
 
-Themes: **Control room** (dark), **Datasheet** (light), **Boardroom** (navy). Every table exports the current view to CSV.
+Themes: **Control room** (dark), **Datasheet** (light — #CBDDE9 background, #2872A1 accent), **Boardroom** (navy). Every table exports the current view to CSV.
 
 ## Definitions
 
@@ -62,6 +76,7 @@ Themes: **Control room** (dark), **Datasheet** (light), **Boardroom** (navy). Ev
 ## Data notes
 
 - Source header `Staus` (misspelt) is mapped to `status`; the corrected spelling is also accepted.
+- Status `Open Quote` is the canonical open state. Older spellings (`Open RFQ's`, `Open RFQ`, `Open Quotes`) are normalised to it by both `convert.py` and the in-browser upload.
 - `MGE Cost Price` is shown as recorded in the row details but is not used for margin, because its currency is inconsistent with `Value` (often ≈ 4.8× the EUR value, suggesting SAR/AED). Confirm the currency before adding a margin KPI.
 - Declined reasons are free text; `convert.py` buckets them (`declinedGroup`) with keyword rules that you can edit in `DECLINE_BUCKETS`.
 - Rows with no Customer and no RFQ date are dropped.
