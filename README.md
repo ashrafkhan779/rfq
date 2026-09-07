@@ -7,7 +7,7 @@ No server, no build step, no external chart library: open `index.html` by double
 
 | File | Purpose |
 |---|---|
-| `index.html` | The dashboard. Single file (HTML + CSS + JS + SheetJS + world outlines + embedded dataset). Works from `file://` and GitHub Pages. |
+| `index.html` | The dashboard. Single file (HTML + CSS + JS + SheetJS + world outlines for the 3D globe + embedded dataset). Works from `file://` and GitHub Pages. |
 | `convert.py` | Reads `HP.xlsx`, cleans and enriches every RFQ line, writes `data.json` and embeds it into `index.html`. |
 | `data.json` | The clean dataset + metadata, for inspection or reuse in other tools. |
 | `README.md` | This file. |
@@ -40,7 +40,7 @@ Opening `index.html` from disk (`file://`) uses the embedded data, so run `pytho
 
 ## Pages
 
-1. **Executive summary** — Total quoted value (EUR) + RFQ count, then PO Received, Under Pipeline, Open Quote, Bid Lost, RFQ Declined (value, count, share), a value-share ribbon, and charts: monthly intake (count by status with totals above each column, value line with labels), status mix, value by country, top customers, win-rate trend, RFQ-to-closing turnaround, declined-reason categories, and a customer map (distinct customers per country, click to drill).
+1. **Executive summary** — Total quoted value (EUR) + RFQ count, then PO Received, Under Pipeline, Open Quote, Bid Lost, RFQ Declined (value, count, share), a value-share ribbon, and charts: monthly intake (count by status with totals above each column, value line with labels), status mix, value by country, top customers, win-rate trend, RFQ-to-closing turnaround, declined-reason categories, and an animated 3D customer globe (distinct customers per country, drag to rotate, click to drill) with a ranked country list.
 2. **Countries** — "All countries" plus one card per country (value, RFQs, POs, win rate, status mini-bar). Clicking a card sets the Country filter, so every chart, KPI and the full-data table follow. The table includes **RFQ Received**, **Closing Date**, **Days to close** (closing − received) and **Due in** (closing − today, for open/pipeline lines; red when overdue).
 3. **Customers** — Searchable customer list with highlight data (value, RFQs, POs, country, last RFQ). Clicking a customer sets the Customer filter and shows the full profile: first/latest RFQ, last PO, PO value, win rate, status ribbon, full-width monthly intake, then "Where the RFQs sit" (count · value per stage) beside a Countries chart (count · value per country), and the full RFQ table.
 4. **Open quotes** — Count, value (with and without budgetary quotes), overdue count, closing within 7 days, median age; charts by stage, aging, country, closing-date week and biggest open opportunities; register sorted by closing date.
