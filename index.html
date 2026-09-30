@@ -97,6 +97,7 @@ button,select,input{font:inherit;color:inherit}
 .theme-switch button{min-height:32px;padding:0 var(--s3);border:0;border-radius:999px;background:transparent;font-size:12px;font-weight:600;color:var(--muted);cursor:pointer}
 .theme-switch button[aria-pressed="true"]{background:var(--surface-3);color:var(--text)}
 
+.topbar.nofilters .filters,.topbar.nofilters .chips,.topbar.nofilters .toggle{display:none}
 .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:var(--s2);margin-top:var(--s3)}
 .f{display:flex;flex-direction:column;gap:3px}
 .f label{font-size:11.5px;font-weight:600;color:var(--muted)}
@@ -890,7 +891,7 @@ class App {
     document.getElementById('nav').addEventListener('click', e => { const b = e.target.closest('[data-page]'); if (b) this.go(b.dataset.page); });
     this.footer();
   }
-  go(page){ this.page = page; document.querySelectorAll('#nav [data-page]').forEach(b => b.setAttribute('aria-selected', b.dataset.page === page)); document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page)); document.getElementById('pageTitle').textContent = PAGES.find(p => p.id === page).title; this.render(); scrollTo({top:0}); }
+  go(page){ this.page = page; document.querySelectorAll('#nav [data-page]').forEach(b => b.setAttribute('aria-selected', b.dataset.page === page)); document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page)); document.getElementById('pageTitle').textContent = PAGES.find(p => p.id === page).title; document.querySelector('.topbar').classList.toggle('nofilters', page === 'data'); this.render(); scrollTo({top:0}); }
   buildFilters(){
     const h = FILTERS.map(fl => `<div class="f"><label for="f-${fl.id}">${fl.label}</label><select id="f-${fl.id}" data-f="${fl.id}"></select></div>`).join('')
       + `<div class="f search"><label for="f-search">Search</label><input id="f-search" type="search" placeholder="Customer, ref, description, feedback…"></div>
@@ -1210,18 +1211,12 @@ class App {
         { lbl:'Never ordered', val: fmtInt((bySeg['No order yet']||[]).length), hint: eur(sum(bySeg['No order yet']||[], m=>m.openVal)) + ' open with them' },
         { lbl:'80% of LTV from', val: ltvTotal ? `${paretoN} customer${paretoN===1?'':'s'}` : '—', hint:'Pareto concentration' },
       ])}
-      <div class="grid g3">
-        ${this.card('pf-seg','Recency segments','Customers by days since last order · LTV inside')}
-        ${this.card('pf-ltv','Lifetime value leaders','Top 10 by PO value received','span2')}
-      </div>
       <div class="grid g2">
-        ${this.card('pf-since','Days since last order','Buying customers, longest gap first — the re-engagement list')}
-        ${this.card('pf-win','Win rate by customer','Decided bids only (≥ 2 decisions) · bubble label shows decisions')}
+        ${this.card('pf-seg','Recency segments','Customers by days since last order · LTV inside')}
+        ${this.card('pf-win','Win rate by customer','Decided bids only (≥ 2 decisions)')}
       </div>
       <div class="card"><div class="card-head"><div><h3>Customer performance matrix</h3><p class="sub">Last order = most recent PO received · Days since = today − last order · Months = active relationship span (first RFQ → latest activity) · Lifetime value = PO received value (EUR) · click a customer name to open it</p></div></div><div id="perfTable"></div></div>`;
     Chart.donut(document.getElementById('pf-seg'), segs.map(s=>({label:s, value:(bySeg[s]||[]).length, color:segColor[s]})), { centerLabel:'customers', fmt:v=>v+' cust.' });
-    Chart.hbar(document.getElementById('pf-ltv'), sortedLtv.slice(0,10).filter(m=>m.ltv>0).map(m=>({label:m.customer, value:m.ltv, color:'var(--st-po)', tip:`${m.pos} POs · last ${fmtDate(m.lastOrder)}`})), { fmt:eur, labelW:150, onClick:k=>this.setFilter('customer',k) });
-    Chart.hbar(document.getElementById('pf-since'), matrix.filter(m=>m.since!==null).sort((a,b)=>b.since-a.since).slice(0,12).map(m=>({label:m.customer, value:m.since, color: segColor[m.segL], tip:`LTV ${eur(m.ltv)} · ${m.pos} POs`})), { fmt:v=>v+' d', labelW:150, onClick:k=>this.setFilter('customer',k) });
     Chart.hbar(document.getElementById('pf-win'), matrix.filter(m=>m.win!==null && (m.pos + byCu[m.customer].filter(r=>r.status==='Bid Lost').length) >= 2).sort((a,b)=>b.win-a.win).slice(0,12).map(m=>({label:m.customer, value:m.win, color: m.win>=0.6?'var(--st-po)':m.win>=0.4?'var(--st-pipe)':'var(--st-lost)', tip:`${m.pos} won · ${byCu[m.customer].filter(r=>r.status==='Bid Lost').length} lost`})), { fmt:v=>fmtPct(v), labelW:150, onClick:k=>this.setFilter('customer',k) });
     const cols = [
       { id:'customer', label:'Customer', key:'customer', render: m => `<a href="#" data-cust="${esc(m.customer)}" style="color:var(--text);font-weight:700;text-decoration:none">${esc(m.customer)}</a>` },
