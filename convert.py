@@ -39,6 +39,9 @@ COLUMNS = {
     "RFQ Received": "rfq",
     "Closing Date": "close",
     "Tender Category": "category",
+    "BUDGETORY": "budgetaryFlag",   # Yes / No column added Sept 2026 (spelling as in the workbook)
+    "BUDGETARY": "budgetaryFlag",
+    "Budgetary": "budgetaryFlag",
     "Description": "desc",
     "Rfx Type": "rfx",
     "Vendor": "vendor",
@@ -111,6 +114,18 @@ def days_between(a, b):
     return (date.fromisoformat(b) - date.fromisoformat(a)).days
 
 
+COUNTRY_ALIASES = {
+    "qatar": "QTR", "saudi arabia": "KSA", "saudi": "KSA", "ksa": "KSA", "uae": "UAE", "united arab emirates": "UAE",
+    "pakistan": "PAK", "jordan": "JRDN", "bangladesh": "BNG", "bahrain": "BAH", "algeria": "ALG", "syria": "SIR",
+    "turkey": "TURK", "turkiye": "TURK", "türkiye": "TURK", "oman": "OMN", "kuwait": "KWT", "egypt": "EGY", "iraq": "IRQ", "india": "IND",
+}
+
+
+def normalise_country(c: str) -> str:
+    key = re.sub(r"\s+", " ", c.strip().lower())
+    return COUNTRY_ALIASES.get(key, c.strip().upper() if len(c.strip()) <= 4 else c.strip())
+
+
 def normalise_status(s):
     key = re.sub(r"\s+", " ", s.strip().lower()).replace("’", "'")
     return STATUS_ALIASES.get(key, s.strip())
@@ -148,6 +163,7 @@ def load(path: Path, sheet: str) -> pd.DataFrame:
 
 def build_rows(df: pd.DataFrame):
     rows = []
+    has_flag = any(c in df.columns for c, k in COLUMNS.items() if k == "budgetaryFlag")
     for i, rec in df.iterrows():
         r = {"id": int(i) + 1}
         for col, key in COLUMNS.items():
@@ -164,6 +180,7 @@ def build_rows(df: pd.DataFrame):
             else:
                 r[key] = clean_text(v)
         r["status"] = normalise_status(r.get("status", "")) or "Unknown"
+        r["country"] = normalise_country(r.get("country", ""))
         r["deal"] = clean_text(r.get("deal", ""))
 
         # --- derived time fields (based on RFQ Received) --------------------
@@ -183,8 +200,14 @@ def build_rows(df: pd.DataFrame):
             r["month"] = None
 
         # --- budgetary / indicative quotes (inflate pipeline value) ---------
-        blob = f"{r.get('desc','')} {r.get('feedback','')}".lower()
-        r["budgetary"] = bool(re.search(r"bdgtry|budgetory|budgetary|budgetry|indicative", blob))
+        # Rule: the BUDGETORY column (Yes/No) decides. Only when the workbook has no such column
+        # do we fall back to keyword detection in the description / feedback text.
+        flag = clean_text(r.pop("budgetaryFlag", "")).lower()
+        if has_flag:
+            r["budgetary"] = flag in {"yes", "y", "true", "1"}
+        else:
+            blob = f"{r.get('desc','')} {r.get('feedback','')}".lower()
+            r["budgetary"] = bool(re.search(r"bdgtry|budgetory|budgetary|budgetry|indicative", blob))
 
         # --- declined-reason bucket (free text -> analysable category) -----
         r["declinedGroup"] = bucket_declined(r.get("declined", "")) if r["status"] == "RFQ Declined" else ""
@@ -235,7 +258,7 @@ def inject_html(html_path: Path, payload: str):
 
 def main():
     ap = argparse.ArgumentParser(description="Convert HP.xlsx into data.json + self-contained index.html")
-    ap.add_argument("xlsx", nargs="?", default="HP.xlsx")
+    ap.add_argument("xlsx", nargs="?", default=None, help="source workbook (default: HP-FIN.xlsx, else HP.xlsx)")
     ap.add_argument("--sheet", default="MAIN TABLE")
     ap.add_argument("--json", default="data.json")
     ap.add_argument("--html", default="index.html")
@@ -243,11 +266,14 @@ def main():
     args = ap.parse_args()
 
     here = Path(__file__).resolve().parent
-    src = Path(args.xlsx)
+    if args.xlsx:
+        src = Path(args.xlsx)
+        if not src.exists():
+            src = here / args.xlsx
+    else:
+        src = next((here / n for n in ("HP-FIN.xlsx", "HP.xlsx") if (here / n).exists()), here / "HP-FIN.xlsx")
     if not src.exists():
-        src = here / args.xlsx
-    if not src.exists():
-        sys.exit(f"ERROR: workbook not found: {args.xlsx}")
+        sys.exit(f"ERROR: workbook not found: {src}")
 
     df = load(src, args.sheet)
     rows = build_rows(df)

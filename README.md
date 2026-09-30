@@ -1,6 +1,6 @@
 # HP Valves — RFQ Intelligence Dashboard
 
-A self-contained, offline-capable executive dashboard built from `HP.xlsx` (sheet **MAIN TABLE**).
+A self-contained, offline-capable executive dashboard built from `HP-FIN.xlsx` (sheet **MAIN TABLE**). The older `HP.xlsx` layout (Tender Category column, no BUDGETORY column) is still accepted.
 No server, no build step, no external chart library: open `index.html` by double-clicking it.
 
 ## Files
@@ -16,8 +16,8 @@ No server, no build step, no external chart library: open `index.html` by double
 
 ```bash
 pip install pandas openpyxl        # once
-python convert.py                  # HP.xlsx in the same folder
-python convert.py "C:\path\HP.xlsx" --sheet "MAIN TABLE"
+python convert.py                  # uses HP-FIN.xlsx (or HP.xlsx) in the same folder
+python convert.py "C:\path\HP-FIN.xlsx" --sheet "MAIN TABLE"
 ```
 
 `convert.py` prints a status summary and rewrites both `data.json` and the dataset inside `index.html`.
@@ -54,7 +54,7 @@ Year · Quarter · Month · Week · Country · Customer · Status · Vendor · f
 Options cascade (e.g. choosing 2025 only lists 2025 months). Active filters appear as removable chips.
 Clicking bars, slices, country cards or customer rows also sets the matching filter (cross-filtering).
 
-**Exclude budgetary quotes** toggle: lines whose description/feedback contain *BDGTRY / BUDGETORY / Budgetary / Indicative* are flagged. Two such quotes (SEC ≈ €12.9M, SWA ≈ €11.8M) account for ~90% of the open value, so the toggle shows the bankable pipeline.
+**Exclude budgetary quotes** toggle: driven by the **BUDGETORY** column in the workbook (Yes = excluded when the toggle is on; No = always shown). If a workbook has no BUDGETORY column, the older keyword detection (*BDGTRY / BUDGETORY / Budgetary / Indicative* in the description) is used instead.
 
 Themes: **Control room** (dark), **Datasheet** (light — #CBDDE9 background, #2872A1 accent), **Boardroom** (navy). Every table exports the current view to CSV.
 
@@ -80,6 +80,7 @@ Themes: **Control room** (dark), **Datasheet** (light — #CBDDE9 background, #2
 - `MGE Cost Price` is shown as recorded in the row details but is not used for margin, because its currency is inconsistent with `Value` (often ≈ 4.8× the EUR value, suggesting SAR/AED). Confirm the currency before adding a margin KPI.
 - Declined reasons are free text; `convert.py` buckets them (`declinedGroup`) with keyword rules that you can edit in `DECLINE_BUCKETS`.
 - Rows with no Customer and no RFQ date are dropped.
+- Country values written as names ("Qatar", "Saudi Arabia") are normalised to the tracker codes (QTR, KSA …) so filters and the map don't split; edit `COUNTRY_ALIASES` / `XL_COUNTRY_ALIAS` to add more.
 - Map: country codes are mapped to ISO3 in `ISO3` / `CENTROID` inside `index.html` (KSA, UAE, PAK, JRDN, QTR, BNG, BAH, ALG, SIR, TURK, OMN, KWT, EGY, IRQ, IND + a few European codes). Add a new code there if a new country appears; bubbles use the centroid so tiny states (Bahrain, Qatar) always show.
 
 ## Design notes (skills applied)
