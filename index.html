@@ -304,6 +304,19 @@ td.cust{font-weight:600}
 .cm-pin{animation:cmpop .5s var(--ease) .6s both;transform-box:fill-box;transform-origin:center}
 @keyframes cmpop{from{opacity:0;transform:scale(.4)}to{opacity:1;transform:scale(1)}}
 .cm-stage{padding-bottom:22px}
+.cimg-stage{padding-bottom:26px}
+.cimg{margin:0;position:relative;width:100%;max-width:520px;opacity:0;transform:scale(.96);transition:opacity .6s var(--ease),transform .6s var(--ease)}
+.cimg.ready{opacity:1;transform:none}
+.cimg img{display:block;width:100%;height:auto;border-radius:14px;filter:drop-shadow(0 24px 30px rgba(0,0,0,.35))}
+.cimg-badge{position:absolute;top:6%;right:6%;width:118px;height:118px;border-radius:50%;background:#FFD666;color:#1A1408;display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 10px 24px -8px rgba(0,0,0,.5),0 0 0 4px #fff;animation:cmpop .5s var(--ease) .5s both}
+.cimg-badge b{font-size:38px;line-height:1;font-weight:800}
+.cimg-badge small{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;margin-top:2px}
+.cimg-badge .ring{position:absolute;inset:-6px;border-radius:50%;border:3px solid rgba(255,214,102,.8);animation:cring 2.4s ease-out infinite}
+@keyframes cring{0%{transform:scale(1);opacity:.9}100%{transform:scale(1.6);opacity:0}}
+.cimg figcaption{position:absolute;left:4%;bottom:4%;background:rgba(10,27,48,.82);color:#fff;border-radius:10px;padding:8px 14px;display:flex;flex-direction:column;backdrop-filter:blur(6px)}
+.cimg figcaption b{font-size:18px;font-weight:800}
+.cimg figcaption span{font-size:12px;opacity:.85}
+@media (prefers-reduced-motion:reduce){ .cimg{opacity:1;transform:none} .cimg-badge .ring{animation:none} }
 
 /* Data & upload page */
 .drop{border:2px dashed var(--border-strong);border-radius:var(--r-lg);padding:var(--s6) var(--s5);text-align:center;background:var(--surface-2);transition:border-color var(--dur),background var(--dur);cursor:pointer;display:block}
@@ -416,6 +429,8 @@ const SCLASS = {"PO Received":"po","Under Pipeline":"pipe",'Open Quote':"open","
 const COUNTRY_NAME = {KSA:"Saudi Arabia",UAE:"United Arab Emirates",PAK:"Pakistan",JRDN:"Jordan",QTR:"Qatar",BNG:"Bangladesh",BAH:"Bahrain",ALG:"Algeria",SIR:"Syria",TURK:"Türkiye",OMN:"Oman",KWT:"Kuwait",EGY:"Egypt",IRQ:"Iraq",IND:"India"};
 const ISO3 = {KSA:'SAU',UAE:'ARE',PAK:'PAK',JRDN:'JOR',QTR:'QAT',BNG:'BGD',BAH:'BHR',ALG:'DZA',SIR:'SYR',TURK:'TUR',OMN:'OMN',KWT:'KWT',EGY:'EGY',IRQ:'IRQ',IND:'IND',UK:'GBR',USA:'USA',GER:'DEU',NLD:'NLD',ITA:'ITA',FRA:'FRA',ESP:'ESP'};
 const CENTROID = {KSA:[45,24],UAE:[54.2,23.8],PAK:[69.5,30],JRDN:[36.5,31.2],QTR:[51.2,25.3],BNG:[90,23.8],BAH:[50.55,26.05],ALG:[2.5,28],SIR:[38.5,35],TURK:[35,39],OMN:[57,21],KWT:[47.8,29.4],EGY:[30,26.5],IRQ:[43.5,33],IND:[79,22],UK:[-2,54],USA:[-98,39],GER:[10.4,51.2],NLD:[5.3,52.2],ITA:[12.5,42.5],FRA:[2.5,46.5],ESP:[-3.7,40.3]};
+/* Country artwork shown in the Executive footprint card when that country is selected: images/<name>.png|jpg|webp next to index.html */
+const COUNTRY_IMAGE = {KSA:'KSA Saudi Arabia', UAE:'UAE United Arab Emirates'};
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const SERIES = ["var(--accent)","var(--st-open)","var(--st-po)","var(--st-pipe)","var(--st-lost)","var(--st-dec)","#8E6BD8","#3AB5C9"];
 
@@ -666,6 +681,23 @@ Chart.globe = function(el, data, opt={}){
   cv.addEventListener('pointerleave', () => { st.dragging = false; st.hover = null; hideTip(); });
   if (withList) el.querySelectorAll('.glrow').forEach(b => { b.addEventListener('click', () => opt.onClick && opt.onClick(b.dataset.key)); b.addEventListener('mouseenter', () => { st.hover = b.dataset.key; if (reduce) requestAnimationFrame(draw); }); b.addEventListener('mouseleave', () => { st.hover = null; }); });
   let rw = stage.clientWidth; const ro = new ResizeObserver(() => { if (!cv.isConnected) { ro.disconnect(); return; } if (stage.clientWidth === rw) return; rw = stage.clientWidth; resize(); if (reduce) requestAnimationFrame(draw); }); ro.observe(stage);
+};
+
+/* Country artwork card (image + customer badge). Falls back to Chart.countryMap if the image file is missing. */
+Chart.countryImage = function(el, code, rows, opt={}){
+  const name = COUNTRY_IMAGE[code]; if (!name) { Chart.countryMap(el, code, rows, opt); return; }
+  const n = uniq(rows.map(r=>r.customer)).length, po = rows.filter(r=>r.status==='PO Received').length;
+  const customers = groupBy(rows, r=>r.customer); const custList = Object.keys(customers).map(k=>({ name:k, rfqs:customers[k].length, value:sum(customers[k],val) })).sort((a,b)=>b.value-a.value || b.rfqs-a.rfqs);
+  const maxV = Math.max(...custList.map(c=>c.value), 1);
+  const list = opt.list === false ? '' : `<div class="globe-list">${custList.map((c,i)=>`<button class="glrow" data-cust="${esc(c.name)}" style="animation-delay:${100+i*45}ms"><span class="gl-rank">${i+1}</span><span class="gl-name"><b>${esc(c.name)}</b></span><span class="gl-bar"><i style="width:${(c.value/maxV*100).toFixed(0)}%"></i></span><span class="gl-n">${c.rfqs}<small>RFQ</small></span><span class="gl-v">${eur(c.value)}</span></button>`).join('')}</div>`;
+  el.innerHTML = `<div class="globe-wrap ${list?'':'solo'}"><div class="globe-stage cimg-stage"><figure class="cimg"><img alt="${esc(COUNTRY_NAME[code]||code)}" draggable="false">
+      <div class="cimg-badge"><span class="ring"></span><b>${n}</b><small>customers</small></div>
+      <figcaption><b>${esc(COUNTRY_NAME[code]||code)}</b><span>${rows.length} RFQs · ${eurFull(sum(rows,val))} quoted · ${po} POs</span></figcaption></figure>
+      <div class="globe-hint">Showing ${esc(COUNTRY_NAME[code]||code)} · clear the Country filter to return to the globe</div></div>${list}</div>`;
+  const img = el.querySelector('img'); const exts = ['png','jpg','jpeg','webp']; let i = 0;
+  const tryNext = () => { if (i >= exts.length) { Chart.countryMap(el, code, rows, opt); return; } img.src = `images/${encodeURIComponent(name)}.${exts[i++]}`; };
+  img.addEventListener('error', tryNext); img.addEventListener('load', () => el.querySelector('.cimg').classList.add('ready')); tryNext();
+  el.querySelectorAll('[data-cust]').forEach(b => b.addEventListener('click', () => opt.onCustomer && opt.onCustomer(b.dataset.cust)));
 };
 
 /* Zoomed single-country map (SVG). Shown while a country filter is active; the globe returns when it is cleared. */
@@ -1000,7 +1032,7 @@ class App {
     const dec = groupBy(rows.filter(r=>r.status==='RFQ Declined'), r=>r.declinedGroup||'No reason recorded');
     Chart.hbar(document.getElementById('c-declined'), Object.keys(dec).map(k=>({label:k, value:dec[k].length, color:'var(--st-dec)'})).sort((a,b)=>b.value-a.value), { fmt:v=>v, labelW:140, aria:'Declined reasons' });
     // Map
-    if (this.f.country) Chart.countryMap(document.getElementById('c-map'), this.f.country, rows, { onCustomer: k => this.setFilter('customer', k) });
+    if (this.f.country) Chart.countryImage(document.getElementById('c-map'), this.f.country, rows, { onCustomer: k => this.setFilter('customer', k) });
     else Chart.globe(document.getElementById('c-map'), this.mapData(rows), { height: 480, onClick: k => this.setFilter('country', k) });
   }
 

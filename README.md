@@ -11,6 +11,7 @@ No server, no build step, no external chart library: open `index.html` by double
 | `convert.py` | Reads `HP.xlsx`, cleans and enriches every RFQ line, writes `data.json` and embeds it into `index.html`. |
 | `data.json` | The clean dataset + metadata, for inspection or reuse in other tools. |
 | `README.md` | This file. |
+| `images/` | Country artwork for the Executive footprint card: `KSA Saudi Arabia.png`, `UAE United Arab Emirates.png`. Add more as `images/<name>.png` and map the code in `COUNTRY_IMAGE` inside `index.html`. |
 
 ## Refresh the dashboard with a new HP.xlsx
 
