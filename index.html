@@ -254,9 +254,17 @@ td.due-cell,th.due-cell{white-space:nowrap;width:1%}
 .bdg{display:inline-block;padding:0 6px;border-radius:4px;font-size:10.5px;font-weight:800;background:var(--accent-soft);color:var(--accent);margin-left:6px;vertical-align:1px}
 
 /* Tables */
-.tbl-wrap{overflow:auto;border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface)}
+.tbl-wrap{overflow:auto;max-height:min(72vh,900px);border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);overscroll-behavior:contain}
+.tbl-xscroll{overflow-x:auto;overflow-y:hidden;height:14px;margin:0 0 4px;border-radius:7px;background:var(--surface-2);position:sticky;top:0;z-index:2}
+.tbl-xscroll>div{height:1px}
+.tbl-xscroll::-webkit-scrollbar{height:12px}
+.tbl-xscroll::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:6px;border:2px solid var(--surface-2)}
+.tbl-xscroll::-webkit-scrollbar-thumb:hover{background:var(--accent)}
+.tbl-wrap::-webkit-scrollbar{height:12px;width:12px}
+.tbl-wrap::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:6px;border:2px solid var(--surface)}
+.tbl-bar.top{padding-top:0}
 table{border-collapse:collapse;width:100%;font-size:13px;min-width:900px}
-thead th{position:sticky;top:0;background:var(--surface-2);text-align:left;padding:10px 12px;font-size:12px;font-weight:700;color:var(--text-2);border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;z-index:1}
+thead th{position:sticky;top:0;box-shadow:0 1px 0 var(--border);background:var(--surface-2);text-align:left;padding:10px 12px;font-size:12px;font-weight:700;color:var(--text-2);border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none;z-index:1}
 thead th:hover{color:var(--text)}
 thead th.num,td.num{text-align:right}
 thead th .arr{opacity:.35;margin-left:4px;font-size:10px}
@@ -858,13 +866,21 @@ function renderTable(host, id, rows, cols, opt={}){
     if (opt.detail && st.open.has(String(rid))) h += `<tr class="detail"><td colspan="${cols.length}">${opt.detail(r)}</td></tr>`;
   });
   if (!slice.length) h += `<tr><td colspan="${cols.length}">${empty()}</td></tr>`;
-  h += `</tbody></table></div><div class="tbl-foot"><span>${data.length.toLocaleString()} rows${opt.detail ? ' · click a row for full details' : ''}</span><div class="pager">`;
-  if (pages > 1) h += `<button class="btn sm" data-pg="prev" ${st.page===0?'disabled':''}>‹</button><span>${st.page+1} / ${pages}</span><button class="btn sm" data-pg="next" ${st.page>=pages-1?'disabled':''}>›</button>`;
-  h += `<button class="btn sm" data-csv="1"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v3h16v-3"/></svg>Export CSV</button></div></div>`;
-  host.innerHTML = h;
+  h += `</tbody></table></div>`;
+  const bar = (pos) => `<div class="tbl-foot tbl-bar ${pos}"><span>${data.length.toLocaleString()} rows${opt.detail ? ' · click a row for full details' : ''}${pos==='top' ? ' · drag the bar below or shift-scroll to see more columns' : ''}</span><div class="pager">`
+    + (pages > 1 ? `<button class="btn sm" data-pg="prev" ${st.page===0?'disabled':''} aria-label="Previous page">‹</button><span>${st.page+1} / ${pages}</span><button class="btn sm" data-pg="next" ${st.page>=pages-1?'disabled':''} aria-label="Next page">›</button>` : '')
+    + `<button class="btn sm" data-csv="1"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v3h16v-3"/></svg>Export CSV</button></div></div>`;
+  host.innerHTML = bar('top') + `<div class="tbl-xscroll" aria-hidden="true"><div></div></div>` + h + bar('bottom');
+  // horizontal scrollbar at the top, kept in sync with the table's own scrollbar
+  const wrap = host.querySelector('.tbl-wrap'), xs = host.querySelector('.tbl-xscroll'), tbl = host.querySelector('table');
+  const syncW = () => { xs.firstElementChild.style.width = tbl.scrollWidth + 'px'; xs.style.display = tbl.scrollWidth > wrap.clientWidth + 2 ? '' : 'none'; };
+  syncW(); let lock = false;
+  xs.addEventListener('scroll', () => { if (lock) return; lock = true; wrap.scrollLeft = xs.scrollLeft; lock = false; });
+  wrap.addEventListener('scroll', () => { if (lock) return; lock = true; xs.scrollLeft = wrap.scrollLeft; lock = false; });
+  if (window.ResizeObserver) { const ro = new ResizeObserver(() => { if (!wrap.isConnected) { ro.disconnect(); return; } syncW(); }); ro.observe(wrap); }
   host.querySelectorAll('th').forEach(th => { const go = () => { const k = th.dataset.col; if (st.sortKey === k) st.dir = st.dir === 'asc' ? 'desc' : 'asc'; else { st.sortKey = k; st.dir = cols.find(c=>c.id===k).num ? 'desc' : 'asc'; } renderTable(host, id, rows, cols, opt); }; th.addEventListener('click', go); th.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } }); });
   host.querySelectorAll('[data-pg]').forEach(b => b.addEventListener('click', () => { st.page += b.dataset.pg === 'next' ? 1 : -1; renderTable(host, id, rows, cols, opt); }));
-  host.querySelector('[data-csv]').addEventListener('click', () => download((opt.csvName || id) + '.csv', toCSV(data, cols)));
+  host.querySelectorAll('[data-csv]').forEach(b => b.addEventListener('click', () => download((opt.csvName || id) + '.csv', toCSV(data, cols))));
   if (opt.detail) host.querySelectorAll('tr.exp').forEach(tr => tr.addEventListener('click', () => { const k = tr.dataset.rid; st.open.has(k) ? st.open.delete(k) : st.open.add(k); renderTable(host, id, rows, cols, opt); }));
 }
 
@@ -872,18 +888,15 @@ function renderTable(host, id, rows, cols, opt={}){
 function rfqColumns(extra={}){
   const cols = [
     { id:'ref', label:'Internal ref', key:'ref', render: r => `<span style="white-space:nowrap">${esc(r.ref||'—')}</span>${r.budgetary?'<span class="bdg">BUDGETARY</span>':''}` },
-    { id:'rfq', label:'RFQ received', key:'rfq', render: r => fmtDate(r.rfq) },
-    { id:'close', label:'Closing date', key:'close', render: r => fmtDate(r.close) },
-    { id:'due', label:'Due in', key: r => dueDays(r), num:true, cls:'due-cell', render: r => { const d = dueDays(r); if (!(r.role==='open' || r.role==='pipe')) return '<span style="color:var(--muted)">closed</span>'; if (d === null) return `<span class="due none" title="${esc(dueBaseLabel(r))} date missing in the tracker">no date</span>`; return `<span class="due ${dueClass(d)}" title="${esc(dueBaseLabel(r))} + 30 days">${dueText(d)}</span>`; }, csv: r => dueDays(r) ?? '' },
+    { id:'status', label:'Status', key:'status', render: r => pill(r.status) },
     { id:'customer', label:'End-Client', key:'customer', cls:'cust' },
-    { id:'trader', label:'Customer (trader)', key:'trader' },
     { id:'country', label:'Country', key:'country' },
     { id:'desc', label:'Description', key:'desc', render: r => `<span class="desc" title="${esc(r.desc)}">${esc(r.desc||'—')}</span>` },
     { id:'value', label:'Value (EUR)', key:'value', num:true, render: r => r.value === null ? '<span style="color:var(--muted)">n/a</span>' : `<b>${eurFull(r.value)}</b>` },
-    { id:'status', label:'Status', key:'status', render: r => pill(r.status) },
+    { id:'rfq', label:'RFQ received', key:'rfq', render: r => fmtDate(r.rfq) },
+    { id:'close', label:'Closing date', key:'close', render: r => fmtDate(r.close) },
+    { id:'due', label:'Due in', key: r => dueDays(r), num:true, cls:'due-cell', render: r => { const d = dueDays(r); if (!(r.role==='open' || r.role==='pipe')) return '<span style="color:var(--muted)">closed</span>'; if (d === null) return `<span class="due none" title="${esc(dueBaseLabel(r))} date missing in the tracker">no date</span>`; return `<span class="due ${dueClass(d)}" title="${esc(dueBaseLabel(r))} + 30 days">${dueText(d)}</span>`; }, csv: r => dueDays(r) ?? '' },
     { id:'stage', label:'Stage', key:'stage' },
-    { id:'owner', label:'Deal owner', key:'owner' },
-    { id:'vendor', label:'Vendor', plural:'vendors', key:'vendor' },
     { id:'po', label:'PO received', key:'po', render: r => fmtDate(r.po) },
     { id:'d2po', label:'Days to PO', key:'daysToPO', num:true, render: r => r.daysToPO === null ? '—' : `${r.daysToPO}d` },
   ];
@@ -1194,7 +1207,7 @@ class App {
         { lbl:'Win rate', val: fmtPct(winRate(rows)), hint:'decided bids' },
         { lbl:'Median RFQ → PO', val: d2po.length ? median(d2po)+' d' : '—' },
       ])}
-      <div class="card"><div class="card-head"><div><h3>All RFQ data${sel ? ` — ${esc(sel)}` : ''}</h3><p class="sub">Every column from the tracker for the current filters · click a row for the full record · export to CSV at the bottom</p></div></div><div id="summaryTable"></div></div>`;
+      <div class="card"><div class="card-head"><div><h3>All RFQ data${sel ? ` — ${esc(sel)}` : ''}</h3><p class="sub">Every column from the tracker for the current filters · click a row for the full record · pager, CSV export and side-scroll bar at the top and bottom</p></div></div><div id="summaryTable"></div></div>`;
     this.bindHero(el);
     const cols = rfqColumns().concat([
       { id:'qtn', label:'QTN date', key:'qtn', render: r => fmtDate(r.qtn) },
