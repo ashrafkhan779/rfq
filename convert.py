@@ -33,7 +33,9 @@ COLUMNS = {
     "SY": "sy",
     "Week Num": "week",
     "Country": "country",
-    "Customer": "customer",
+    "End-Client": "customer",     # end-client is the client dimension of the dashboard
+    "End Client": "customer",
+    "Customer": "trader",         # trading partner / contractual customer
     "Deal Name": "deal",
     "Deal Owner": "owner",
     "RFQ Received": "rfq",
@@ -61,15 +63,19 @@ COLUMNS = {
 }
 
 DATE_KEYS = ["rfq", "close", "qtn", "clarRecv", "clarDone", "po"]
-STATUS_ORDER = ["PO Received", "Under Pipeline", "Open Quote", "Bid Lost", "RFQ Declined"]
+# Status values are kept exactly as typed in the workbook (whitespace collapsed; case variants merged to the first
+# spelling seen). Each is classified into a ROLE by keyword — the dashboard's logic runs on the role, not the label.
+ROLE_ORDER = ["po", "pipe", "open", "lost", "dec", "other"]
 
-# Normalise a few status spellings that show up in hand-maintained trackers
-STATUS_ALIASES = {
-    "open rfq": "Open Quote", "open rfqs": "Open Quote", "open rfq's": "Open Quote",
-    "open quote": "Open Quote", "open quotes": "Open Quote", "open quotation": "Open Quote",
-    "po received": "PO Received", "under pipeline": "Under Pipeline",
-    "bid lost": "Bid Lost", "rfq declined": "RFQ Declined", "declined": "RFQ Declined",
-}
+
+def role_of(status: str) -> str:
+    k = (status or "").lower()
+    if re.search(r"\bpo\b|purchase order|awarded|won", k): return "po"
+    if re.search(r"pipeline|pipe", k): return "pipe"
+    if re.search(r"open|quoted|quote", k): return "open"
+    if re.search(r"lost|reject", k): return "lost"
+    if re.search(r"declin|no bid|not quoted|regret", k): return "dec"
+    return "other"
 
 
 def clean_text(v):
@@ -115,9 +121,9 @@ def days_between(a, b):
 
 
 COUNTRY_ALIASES = {
-    "qatar": "QTR", "saudi arabia": "KSA", "saudi": "KSA", "ksa": "KSA", "uae": "UAE", "united arab emirates": "UAE",
+    "qatar": "QTR", "saudi arabia": "KSA", "saudi": "KSA", "ksa": "KSA", "uae": "UAE", "united arab emirates": "UAE", "uaw": "UAE",
     "pakistan": "PAK", "jordan": "JRDN", "bangladesh": "BNG", "bahrain": "BAH", "algeria": "ALG", "syria": "SIR",
-    "turkey": "TURK", "turkiye": "TURK", "türkiye": "TURK", "oman": "OMN", "kuwait": "KWT", "egypt": "EGY", "iraq": "IRQ", "india": "IND",
+    "turkmenistan": "TURK", "turkmen": "TURK", "tkm": "TURK", "oman": "OMN", "kuwait": "KWT", "egypt": "EGY", "iraq": "IRQ", "india": "IND",
 }
 
 
@@ -126,9 +132,34 @@ def normalise_country(c: str) -> str:
     return COUNTRY_ALIASES.get(key, c.strip().upper() if len(c.strip()) <= 4 else c.strip())
 
 
-def normalise_status(s):
-    key = re.sub(r"\s+", " ", s.strip().lower()).replace("’", "'")
-    return STATUS_ALIASES.get(key, s.strip())
+def derive_status(stage: str) -> str:
+    """Mirrors the Staus formula in the workbook (plus clarification stages the formula misses)."""
+    k = (stage or "").strip().lower()
+    if not k:
+        return ""
+    if k == "po received": return "PO Received"
+    if k == "bid lost": return "Bid Lost"
+    if k == "rfq declined": return "RFQ Declined"
+    if re.search(r"awaiting po|clarification", k): return "Under Pipeline"
+    if re.search(r"quote received supplier|quoted to client", k): return "Open Quotes"
+    if re.search(r"rfq acknowledged|rfq received|floated to supplier", k): return "Open RFQ"
+    return ""
+
+
+def normalise_status(s, stage=""):
+    return re.sub(r"\s+", " ", (s or "").strip()) or derive_status(stage) or "Unknown"
+
+
+def merge_status_spellings(rows):
+    """Case/spacing variants of the same status collapse to the most common spelling in the file."""
+    from collections import Counter, defaultdict
+    counts = defaultdict(Counter)
+    for r in rows:
+        counts[r["status"].lower().replace("’", "'")][r["status"]] += 1
+    canon = {k: c.most_common(1)[0][0] for k, c in counts.items()}
+    for r in rows:
+        r["status"] = canon[r["status"].lower().replace("’", "'")]
+        r["role"] = role_of(r["status"])
 
 
 DECLINE_BUCKETS = [
@@ -151,9 +182,68 @@ def bucket_declined(text: str) -> str:
     return "Other"
 
 
+def hdr_key(h) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(h or "").lower())
+
+
+_KEY_BY_NORM = {hdr_key(c): k for c, k in COLUMNS.items()}
+
+
+def match_header(h, headers=()):
+    k = hdr_key(h)
+    if not k:
+        return None
+    if k == "customer":            # 'Customer' = client unless an End-Client column exists
+        return "trader" if any(hdr_key(x) == "endclient" for x in headers) else "customer"
+    if k == "endclient":
+        return "customer"
+    if k in _KEY_BY_NORM:
+        return _KEY_BY_NORM[k]
+    if k.startswith("budget"):            # BUDGETORY / Budgetary Quote Y/N / Budgetary?
+        return "budgetaryFlag"
+    if re.fullmatch(r"sta?tus", k):
+        return "status"
+    if k in ("weeknum", "week", "wk"):
+        return "week"
+    if k in ("internalref", "internalreference"):
+        return "ref"
+    if k in ("hpqtnref", "hpqtnreference", "hpquotationref"):
+        return "hpRef"
+    if k in ("mgecostprice", "costprice"):
+        return "cost"
+    return None
+
+
 def load(path: Path, sheet: str) -> pd.DataFrame:
-    df = pd.read_excel(path, sheet_name=sheet)
-    df.columns = [str(c).strip() for c in df.columns]
+    """Read the sheet, locating the header row automatically (it must contain Customer + RFQ Received)
+    and renaming columns to their canonical workbook names so that renamed/extra columns don't break anything."""
+    xl = pd.ExcelFile(path)
+    if sheet not in xl.sheet_names:
+        alt = next((n for n in xl.sheet_names if n.strip().upper() == sheet.strip().upper()), xl.sheet_names[0])
+        print(f"  sheet '{sheet}' not found — using '{alt}'")
+        sheet = alt
+    probe = pd.read_excel(path, sheet_name=sheet, header=None, nrows=15)
+    hi = next((i for i, row in probe.iterrows()
+               if any(hdr_key(v) in ("customer", "endclient") for v in row) and any(hdr_key(v) == "rfqreceived" for v in row)), None)
+    if hi is None:
+        sys.exit("ERROR: could not find the header row (needs 'Customer' and 'RFQ Received').")
+    df = pd.read_excel(path, sheet_name=sheet, header=hi)
+    canon_by_key = {}
+    for c, k in COLUMNS.items():
+        canon_by_key.setdefault(k, c)
+    rename, extra, used = {}, [], set()
+    for c in df.columns:
+        k = match_header(c, list(df.columns))
+        if k and k not in used:
+            used.add(k)
+            rename[c] = canon_by_key[k]
+        elif str(c).strip() and not str(c).startswith("Unnamed"):
+            extra.append(str(c).strip())
+    df = df.rename(columns=rename)
+    df = df.loc[:, ~df.columns.duplicated()]
+    df.attrs["extra_cols"] = extra
+    if extra:
+        print(f"  extra columns kept: {', '.join(extra)}")
     # keep only rows that have a customer or an RFQ date
     keep = [c for c in ("Customer", "RFQ Received") if c in df.columns]
     if keep:
@@ -179,7 +269,10 @@ def build_rows(df: pd.DataFrame):
                 r[key] = int(n) if n is not None else None
             else:
                 r[key] = clean_text(v)
-        r["status"] = normalise_status(r.get("status", "")) or "Unknown"
+        if not r.get("customer") and r.get("trader"):
+            r["customer"] = r["trader"]       # End-Client blank → fall back to the trading partner
+        r["status"] = normalise_status(r.get("status", ""), r.get("stage", ""))
+        r["role"] = role_of(r["status"])
         r["country"] = normalise_country(r.get("country", ""))
         r["deal"] = clean_text(r.get("deal", ""))
 
@@ -204,20 +297,34 @@ def build_rows(df: pd.DataFrame):
         # do we fall back to keyword detection in the description / feedback text.
         flag = clean_text(r.pop("budgetaryFlag", "")).lower()
         if has_flag:
-            r["budgetary"] = flag in {"yes", "y", "true", "1"}
+            r["budgetary"] = flag in {"yes", "y", "true", "1", "x", "✓"}
         else:
             blob = f"{r.get('desc','')} {r.get('feedback','')}".lower()
             r["budgetary"] = bool(re.search(r"bdgtry|budgetory|budgetary|budgetry|indicative", blob))
 
         # --- declined-reason bucket (free text -> analysable category) -----
-        r["declinedGroup"] = bucket_declined(r.get("declined", "")) if r["status"] == "RFQ Declined" else ""
+        r["declinedGroup"] = bucket_declined(r.get("declined", "")) if r["role"] == "dec" else ""
 
         # --- derived cycle-time fields --------------------------------------
         r["daysToClose"] = days_between(rfq, r.get("close"))      # RFQ -> Closing date
         r["daysToQtn"] = days_between(rfq, r.get("qtn"))          # RFQ -> Quotation
         r["daysToPO"] = days_between(rfq, r.get("po"))            # RFQ -> PO received
         r["daysClarification"] = days_between(r.get("clarRecv"), r.get("clarDone"))
+        extra = {}
+        for c in df.attrs.get("extra_cols", []):
+            if c not in df.columns:
+                continue
+            v = rec[c]
+            if isinstance(v, (datetime, date, pd.Timestamp)):
+                v = to_iso(v)
+            elif isinstance(v, float) and v.is_integer():
+                v = str(int(v))
+            extra[c] = clean_text(v)
+        extra = {k: v for k, v in extra.items() if v not in ("", None)}
+        if extra:
+            r["extra"] = extra
         rows.append(r)
+    merge_status_spellings(rows)
     return rows
 
 
@@ -225,8 +332,7 @@ def build_meta(rows, source: Path, sheet: str):
     def uniq(key):
         return sorted({r[key] for r in rows if r.get(key) not in (None, "")}, key=lambda x: str(x))
 
-    statuses = [s for s in STATUS_ORDER if any(r["status"] == s for r in rows)]
-    statuses += [s for s in uniq("status") if s not in statuses]
+    statuses = sorted(uniq("status"), key=lambda s: (ROLE_ORDER.index(role_of(s)), s))
     dates = [r["rfq"] for r in rows if r.get("rfq")]
     return {
         "title": "HP Valves — RFQ Intelligence",
@@ -300,7 +406,7 @@ def main():
         s[1] += r["value"] or 0
     for s in meta["statuses"]:
         c, v = by_status.get(s, (0, 0))
-        print(f"  {s:<16} {c:>4} RFQs   € {v:,.0f}")
+        print(f"  {s:<18} [{role_of(s):<5}] {c:>4} RFQs   € {v:,.0f}")
 
 
 if __name__ == "__main__":
